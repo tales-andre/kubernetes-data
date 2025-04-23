@@ -32,6 +32,32 @@ FORMAT_ERRORS = [", ,", ",,", ", , ", ",,,", " , ,", ",, ,"]
 ERROR_KEYWORDS = ["ERROR", "Error", "Exception", "Failed", "Fail"]
 KUBE_CONTEXT: str | None = None
 
+# ========================================
+# ===== YAML LOADER IGNORANDO TAGS =======
+# ========================================
+
+class SafeIgnoringLoader(yaml.SafeLoader):
+    """Loader que ignora qualquer tag desconhecida e a trata como types padrão."""
+
+# registra um construtor "catch‑all" para QUALQUER tag
+
+def _ignore_unknown(loader, tag_suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    # fallback – retorna string vazia
+    return ""
+
+SafeIgnoringLoader.add_multi_constructor("", _ignore_unknown)
+
+
+def load_yaml_all(stream):
+    """Carrega todos os documentos YAML usando o SafeIgnoringLoader."""
+    return list(yaml.load_all(stream, Loader=SafeIgnoringLoader))
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Helper functions to work with kubectl taking the active context into account
