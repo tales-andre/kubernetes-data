@@ -23,10 +23,11 @@ CLUSTER_INFO_DUMP = os.path.join(OUTPUT_DIR, "cluster_info_dump.yaml")
 LOGS_DIR = os.path.join(OUTPUT_DIR, "pod_logs")
 ERROR_LOGS_FILE = os.path.join(OUTPUT_DIR, "error_logs.csv")
 
-PROHIBITED_IP = "10.35."
+# padrões de IPs proibidos: qualquer IP começando com 10.35. e qualquer ocorrência de "10-35"
+PROHIBITED_IP_PATTERNS = [r"10\.35\.\d+\.\d+", r"10-35"]
 PROHIBITED_REGION = "sa-east-1"
 
-FORMAT_ERRORS = [", ,", ",,", ", , ", ",,,", " ,,", ",, ,"]
+FORMAT_ERRORS = [", ,", ",,", ", , ", ",,,", " , ,", ",, ,"]
 
 ERROR_KEYWORDS = ["ERROR", "Error", "Exception", "Failed", "Fail"]
 KUBE_CONTEXT: str | None = None
@@ -131,7 +132,8 @@ def collect_pod_logs():
             st.error(f"Erro ao listar namespaces: {e}")
             return
 
-        namespaces = [ns for ns in namespaces if ns != "velero"]  # ignora velero
+        # ignora namespace velero
+        namespaces = [ns for ns in namespaces if ns.lower() != "velero"]
 
         for namespace in namespaces:
             try:
@@ -140,8 +142,7 @@ def collect_pod_logs():
                     "pods",
                     "-n",
                     namespace,
-                    "-o",
-                    "jsonpath={.items[*].metadata.name}",
+                    "-o", "jsonpath={.items[*].metadata.name}",
                 ).decode().split()
             except Exception as e:
                 st.warning(f"Erro ao listar pods no namespace {namespace}: {e}")
@@ -165,8 +166,7 @@ def collect_pod_logs():
                         pod,
                         "-n",
                         namespace,
-                        "-o",
-                        "jsonpath={.spec.containers[*].name}",
+                        "-o", "jsonpath={.spec.containers[*].name}",
                     ).decode().split()
                     if len(containers) > 1:
                         for container in containers:
@@ -257,8 +257,9 @@ def analyze_k8s_resources_yaml(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         docs = list(yaml.safe_load_all(f))
     docs = [d for d in docs if d is not None and isinstance(d, dict)]
-    ingress_list = [resource for resource in docs if resource.get("kind", "") == "Ingress"]
-    service_list = [resource for resource in docs if resource.get("kind", "") == "Service"]
+    # ignora resources do namespace velero
+    ingress_list = [resource for resource in docs if resource.get("kind", "") == "Ingress" and resource.get("metadata", {}).get("namespace") != "velero"]
+    service_list = [resource for resource in docs if resource.get("kind", "") == "Service" and resource.get("metadata", {}).get("namespace") != "velero"]
     ingress_anomalies = detect_ingress_anomalies(ingress_list)
     svc_anomalies = detect_service_anomalies(service_list)
     results = {"Ingress": ingress_anomalies, "Service": svc_anomalies}
