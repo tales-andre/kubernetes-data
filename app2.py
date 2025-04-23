@@ -29,6 +29,24 @@ PROHIBITED_REGION = "sa-east-1"
 FORMAT_ERRORS = [", ,", ",,", ", , ", ",,," , " ,," , ",, ,"]
 
 ERROR_KEYWORDS = ["ERROR", "Error", "Exception", "Failed", "Fail"]
+KUBE_CONTEXT: str | None = None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Helper functions to work with kubectl taking the active context into account
+# ────────────────────────────────────────────────────────────────────────────────
+
+def kube_cmd(*args: str) -> list[str]:
+    """Build a kubectl command list, automatically injecting --context if set."""
+    cmd = ["kubectl"]
+    if KUBE_CONTEXT:
+        cmd.extend(["--context", KUBE_CONTEXT])
+    cmd.extend(args)
+    return cmd
+
+
+def run_kubectl(*args: str, **kwargs):
+    """Wrapper around subprocess.check_output using *kube_cmd*."""
+    return subprocess.check_output(kube_cmd(*args), **kwargs)
 
 # ========================================
 # ============ FUNÇÕES UTILITY ===========
@@ -37,6 +55,16 @@ ERROR_KEYWORDS = ["ERROR", "Error", "Exception", "Failed", "Fail"]
 def ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(LOGS_DIR, exist_ok=True)
+
+
+def get_available_contexts() -> list[str]:
+    """Return the list of contexts configured in the local kube‑config."""
+    try:
+        contexts = subprocess.check_output(["kubectl", "config", "get-contexts", "-o", "name"])
+        return contexts.decode().split()
+    except Exception as e:
+        st.error(f"Erro ao listar contexts: {e}")
+        return []
 
 # ========================================
 # ============ COLETA DE DADOS ===========
@@ -560,21 +588,37 @@ def analyze_resources_and_logs():
 # ========================================
 
 def main():
-    st.title("Auditoria & Análise de Logs do Cluster EKS")
-    st.markdown("""
-    Este aplicativo coleta os recursos (YAML) e logs dos pods do cluster e permite:
-    - Verificar erros e identificar padrões com técnicas de clusterização
-    - Exibir recursos associados (Ingress, Services) ao lado dos pods com erro
-    - Detalhar os motivos dos pods em Pending e outros problemas
-    Selecione uma ação no menu lateral.
-    """)
+    global KUBE_CONTEXT  # noqa:  PLW0603
+
+    st.set_page_config(page_title="K8s Cluster Auditor", layout="wide")
+    st.title("🔍 Kubernetes Cluster Auditor & Log Analyzer")
+
+    # ── Context selector ───────────────────────────────────────────────────────
+    contexts = get_available_contexts()
+    if not contexts:
+        st.stop()
+
+    default_index = 0
+    if "selected_ctx" in st.session_state:
+        try:
+            default_index = contexts.index(st.session_state["selected_ctx"])
+        except ValueError:
+            pass
+    selected_ctx = st.sidebar.selectbox("Selecionar contexto Kubernetes", contexts, index=default_index)
+    st.session_state["selected_ctx"] = selected_ctx
+    KUBE_CONTEXT = selected_ctx
+    st.sidebar.markdown(f"**Contexto ativo:** `{KUBE_CONTEXT}`")
+
+    # ── Action menu ───────────────────────────────────────────────────────────
+    st.sidebar.markdown("---")
     acao = st.sidebar.radio("Menu de Ações", (
         "Coletar recursos (YAML)",
         "Executar cluster-info dump",
         "Coletar logs dos pods",
         "Analisar recursos e logs",
-        "Armazenar logs de erro"
+        "Armazenar logs de erro",
     ))
+
     if acao == "Coletar recursos (YAML)":
         if st.button("Iniciar Coleta de Recursos"):
             collect_all_resources()
@@ -590,6 +634,7 @@ def main():
     elif acao == "Armazenar logs de erro":
         if st.button("Armazenar Logs de Erro"):
             store_error_logs()
+
 
 if __name__ == "__main__":
     main()
