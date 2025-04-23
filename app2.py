@@ -26,17 +26,21 @@ ERROR_LOGS_FILE = os.path.join(OUTPUT_DIR, "error_logs.csv")
 PROHIBITED_IP = "10.35."
 PROHIBITED_REGION = "sa-east-1"
 
-FORMAT_ERRORS = [", ,", ",,", ", , ", ",,," , " ,," , ",, ,"]
+FORMAT_ERRORS = [", ,", ",,", ", , ", ",,,", " ,,", ",, ,"]
 
 ERROR_KEYWORDS = ["ERROR", "Error", "Exception", "Failed", "Fail"]
 KUBE_CONTEXT: str | None = None
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Helper functions to work with kubectl taking the active context into account
 # ────────────────────────────────────────────────────────────────────────────────
 
 def kube_cmd(*args: str) -> list[str]:
-    """Build a kubectl command list, automatically injecting --context if set."""
+    """
+    Assemble a kubectl command, injecting --context if the
+    global KUBE_CONTEXT variable is set.
+    """
     cmd = ["kubectl"]
     if KUBE_CONTEXT:
         cmd.extend(["--context", KUBE_CONTEXT])
@@ -45,7 +49,7 @@ def kube_cmd(*args: str) -> list[str]:
 
 
 def run_kubectl(*args: str, **kwargs):
-    """Wrapper around subprocess.check_output using *kube_cmd*."""
+    """Shortcut for subprocess.check_output(kubectl …) respecting context."""
     return subprocess.check_output(kube_cmd(*args), **kwargs)
 
 # ========================================
@@ -58,9 +62,11 @@ def ensure_output_dir():
 
 
 def get_available_contexts() -> list[str]:
-    """Return the list of contexts configured in the local kube‑config."""
+    """Return the list of contexts configured in the local kube-config."""
     try:
-        contexts = subprocess.check_output(["kubectl", "config", "get-contexts", "-o", "name"])
+        contexts = subprocess.check_output(
+            ["kubectl", "config", "get-contexts", "-o", "name"]
+        )
         return contexts.decode().split()
     except Exception as e:
         st.error(f"Erro ao listar contexts: {e}")
@@ -72,89 +78,118 @@ def get_available_contexts() -> list[str]:
 
 def collect_all_resources():
     ensure_output_dir()
-    with st.spinner("Coletando recursos do cluster..."):
+    with st.spinner("Coletando recursos do cluster…"):
         try:
             with open(ALL_RESOURCES_FILE, "w", encoding="utf-8") as outf:
                 outf.write("# Dump de TODOS os recursos\n")
-            cmd_ns = ["kubectl", "api-resources", "--verbs=list", "--namespaced=true", "-o", "name"]
-            resources_ns = subprocess.check_output(cmd_ns).decode().split()
-            cmd_non_ns = ["kubectl", "api-resources", "--verbs=list", "--namespaced=false", "-o", "name"]
-            resources_non_ns = subprocess.check_output(cmd_non_ns).decode().split()
+
+            resources_ns = run_kubectl(
+                "api-resources", "--verbs=list", "--namespaced=true", "-o", "name"
+            ).decode().split()
+            resources_non_ns = run_kubectl(
+                "api-resources", "--verbs=list", "--namespaced=false", "-o", "name"
+            ).decode().split()
+
             all_resources = sorted(set(resources_ns + resources_non_ns))
             for resource in all_resources:
                 with open(ALL_RESOURCES_FILE, "a", encoding="utf-8") as outf:
                     outf.write(f"\n# Recurso: {resource}\n")
-                cmd_get = ["kubectl", "get", resource, "--all-namespaces", "-o", "yaml"]
                 try:
-                    result = subprocess.check_output(cmd_get)
+                    result = run_kubectl(
+                        "get", resource, "--all-namespaces", "-o", "yaml"
+                    )
                     with open(ALL_RESOURCES_FILE, "ab") as outf_bin:
                         outf_bin.write(result)
                 except subprocess.CalledProcessError:
                     pass
                 except Exception as e:
                     st.warning(f"Falha ao coletar {resource}: {e}")
+
             st.success(f"Coleta concluída. Arquivo gerado: {ALL_RESOURCES_FILE}")
         except Exception as e:
             st.error(f"Erro ao coletar recursos: {e}")
 
 def cluster_info_dump():
     ensure_output_dir()
-    with st.spinner("Executando cluster-info dump..."):
+    with st.spinner("Executando cluster-info dump…"):
         try:
-            with open(CLUSTER_INFO_DUMP, "w", encoding="utf-8") as f:
-                result = subprocess.check_output(["kubectl", "cluster-info", "dump", "--all-namespaces"])
-                f.write(result.decode("utf-8"))
+            result = run_kubectl("cluster-info", "dump", "--all-namespaces")
+            with open(CLUSTER_INFO_DUMP, "wb") as f:
+                f.write(result)
             st.success(f"Arquivo gerado: {CLUSTER_INFO_DUMP}")
         except Exception as e:
             st.error(f"Não foi possível executar cluster-info dump: {e}")
 
 def collect_pod_logs():
     ensure_output_dir()
-    with st.spinner("Coletando logs dos pods..."):
+    with st.spinner("Coletando logs dos pods…"):
         try:
-            ns_cmd = ["kubectl", "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"]
-            namespaces = subprocess.check_output(ns_cmd).decode().split()
+            namespaces = run_kubectl(
+                "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"
+            ).decode().split()
         except Exception as e:
             st.error(f"Erro ao listar namespaces: {e}")
             return
 
+        namespaces = [ns for ns in namespaces if ns != "velero"]  # ignora velero
+
         for namespace in namespaces:
             try:
-                pods_cmd = ["kubectl", "get", "pods", "-n", namespace, "-o", "jsonpath={.items[*].metadata.name}"]
-                pods = subprocess.check_output(pods_cmd).decode().split()
+                pods = run_kubectl(
+                    "get",
+                    "pods",
+                    "-n",
+                    namespace,
+                    "-o",
+                    "jsonpath={.items[*].metadata.name}",
+                ).decode().split()
             except Exception as e:
                 st.warning(f"Erro ao listar pods no namespace {namespace}: {e}")
                 continue
 
             for pod in pods:
+                # Logs do pod em si
                 try:
                     log_file = os.path.join(LOGS_DIR, f"{namespace}__{pod}.log")
-                    logs = subprocess.check_output(["kubectl", "logs", pod, "-n", namespace], stderr=subprocess.STDOUT)
-                    with open(log_file, "w", encoding="utf-8") as lf:
-                        lf.write(logs.decode("utf-8"))
+                    logs = run_kubectl("logs", pod, "-n", namespace, stderr=subprocess.STDOUT)
+                    with open(log_file, "wb") as lf:
+                        lf.write(logs)
                 except Exception:
                     pass
 
+                # Logs de containers adicionais (se houver)
                 try:
-                    containers = subprocess.check_output([
-                        "kubectl", "get", "pod", pod, "-n", namespace,
-                        "-o", "jsonpath={.spec.containers[*].name}"
-                    ]).decode().split()
+                    containers = run_kubectl(
+                        "get",
+                        "pod",
+                        pod,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "jsonpath={.spec.containers[*].name}",
+                    ).decode().split()
                     if len(containers) > 1:
                         for container in containers:
                             try:
-                                container_log_file = os.path.join(LOGS_DIR, f"{namespace}__{pod}__{container}.log")
-                                logs_cont = subprocess.check_output([
-                                    "kubectl", "logs", pod, "-n", namespace, "-c", container
-                                ], stderr=subprocess.STDOUT)
-                                with open(container_log_file, "w", encoding="utf-8") as clf:
-                                    clf.write(logs_cont.decode("utf-8"))
+                                container_log_file = os.path.join(
+                                    LOGS_DIR, f"{namespace}__{pod}__{container}.log"
+                                )
+                                logs_cont = run_kubectl(
+                                    "logs",
+                                    pod,
+                                    "-n",
+                                    namespace,
+                                    "-c",
+                                    container,
+                                    stderr=subprocess.STDOUT,
+                                )
+                                with open(container_log_file, "wb") as clf:
+                                    clf.write(logs_cont)
                             except Exception:
                                 pass
                 except Exception:
                     pass
         st.success(f"Logs coletados em: {LOGS_DIR}")
-
 # ========================================
 # ============ ANÁLISE DE RESOURCES ======
 # ========================================
@@ -349,7 +384,7 @@ def analyze_pod_errors():
 
 def get_pod_statuses():
     try:
-        output = subprocess.check_output(["kubectl", "get", "pods", "--all-namespaces", "-o", "json"])
+        output = run_kubectl("get", "pods", "--all-namespaces", "-o", "json").decode()
         data = json.loads(output)
         items = data.get("items", [])
         records = []
@@ -384,14 +419,16 @@ def get_pod_statuses():
                     if not message and last_state["waiting"].get("message"):
                         message = last_state["waiting"].get("message")
             waiting_reasons = ", ".join(waiting_reasons)
-            records.append({
-                "namespace": namespace,
-                "pod": pod_name,
-                "phase": phase,
-                "reason": reason,
-                "message": message,
-                "waiting_reasons": waiting_reasons
-            })
+            records.append(
+                {
+                    "namespace": namespace,
+                    "pod": pod_name,
+                    "phase": phase,
+                    "reason": reason,
+                    "message": message,
+                    "waiting_reasons": waiting_reasons,
+                }
+            )
         return pd.DataFrame(records)
     except Exception as e:
         st.error(f"Erro ao obter status dos pods: {e}")
@@ -399,9 +436,8 @@ def get_pod_statuses():
 
 def get_pod_description(namespace, pod):
     try:
-        cmd = ["kubectl", "describe", "pod", pod, "-n", namespace]
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-        return output.decode("utf-8")
+        output = run_kubectl("describe", "pod", pod, "-n", namespace, stderr=subprocess.STDOUT).decode()
+        return output
     except Exception as e:
         return f"Erro ao descrever o pod: {e}"
 
@@ -588,7 +624,7 @@ def analyze_resources_and_logs():
 # ========================================
 
 def main():
-    global KUBE_CONTEXT  # noqa:  PLW0603
+    global KUBE_CONTEXT  # pylint: disable=global-statement
 
     st.set_page_config(page_title="K8s Cluster Auditor", layout="wide")
     st.title("🔍 Kubernetes Cluster Auditor & Log Analyzer")
@@ -604,20 +640,25 @@ def main():
             default_index = contexts.index(st.session_state["selected_ctx"])
         except ValueError:
             pass
-    selected_ctx = st.sidebar.selectbox("Selecionar contexto Kubernetes", contexts, index=default_index)
+    selected_ctx = st.sidebar.selectbox(
+        "Selecionar contexto Kubernetes", contexts, index=default_index
+    )
     st.session_state["selected_ctx"] = selected_ctx
     KUBE_CONTEXT = selected_ctx
     st.sidebar.markdown(f"**Contexto ativo:** `{KUBE_CONTEXT}`")
 
     # ── Action menu ───────────────────────────────────────────────────────────
     st.sidebar.markdown("---")
-    acao = st.sidebar.radio("Menu de Ações", (
-        "Coletar recursos (YAML)",
-        "Executar cluster-info dump",
-        "Coletar logs dos pods",
-        "Analisar recursos e logs",
-        "Armazenar logs de erro",
-    ))
+    acao = st.sidebar.radio(
+        "Menu de Ações",
+        (
+            "Coletar recursos (YAML)",
+            "Executar cluster-info dump",
+            "Coletar logs dos pods",
+            "Analisar recursos e logs",
+            "Armazenar logs de erro",
+        ),
+    )
 
     if acao == "Coletar recursos (YAML)":
         if st.button("Iniciar Coleta de Recursos"):
