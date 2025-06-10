@@ -142,6 +142,44 @@ def load_logs_df():
     df["timestamp"] = df["line"].apply(to_ts)
     return df
 
+# =============== ANOMALIAS ================
+def detect_ingress_anomalies(ingress_docs: list[dict]) -> list[dict]:
+    """Return a list of detected anomalies in ingress objects."""
+    anomalies = []
+    seen = set()
+    for ing in ingress_docs:
+        meta = ing.get("metadata", {})
+        ns = meta.get("namespace")
+        name = meta.get("name")
+        key = (ns, name)
+        if key in seen:
+            anomalies.append({"namespace": ns, "name": name, "reason": "duplicado"})
+        else:
+            seen.add(key)
+        rules = ing.get("spec", {}).get("rules")
+        if not rules:
+            anomalies.append({"namespace": ns, "name": name, "reason": "sem rules"})
+    return anomalies
+
+
+def detect_service_anomalies(service_docs: list[dict]) -> list[dict]:
+    """Return a list of detected anomalies in service objects."""
+    anomalies = []
+    seen = set()
+    for svc in service_docs:
+        meta = svc.get("metadata", {})
+        ns = meta.get("namespace")
+        name = meta.get("name")
+        key = (ns, name)
+        if key in seen:
+            anomalies.append({"namespace": ns, "name": name, "reason": "duplicado"})
+        else:
+            seen.add(key)
+        ports = svc.get("spec", {}).get("ports")
+        if not ports:
+            anomalies.append({"namespace": ns, "name": name, "reason": "sem ports"})
+    return anomalies
+
 # =============== ANÁLISE RECURSOS =========
 def analyze_resources_fast():
     if not os.path.exists(ALL_RESOURCES):
@@ -163,10 +201,14 @@ def analyze_resources_fast():
             if isinstance(d, dict) and d.get("metadata", {}).get("namespace") != "velero"]
     ingress = [d for d in docs if d.get("kind") == "Ingress"]
     svcs    = [d for d in docs if d.get("kind") == "Service"]
-    ing_anom = detect_ingress_anomalies(ingress)
-    svc_anom = detect_service_anomalies(svcs)
+    ing_anom = detect_ingress_anomalies(ingress) or []
+    svc_anom = detect_service_anomalies(svcs) or []
     st.write("Ingress anômalos:", len(ing_anom))
+    if ing_anom:
+        st.write(ing_anom)
     st.write("Services anômalos:", len(svc_anom))
+    if svc_anom:
+        st.write(svc_anom)
 
 # =============== DASHBOARD LOGS ===========
 def analyze_logs_fast():
