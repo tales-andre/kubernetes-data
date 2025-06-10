@@ -49,12 +49,12 @@ def ensure_dirs():
     os.makedirs(LOGS_DIR, exist_ok=True)
 
 # =============== CACHE PESADO ===============
-@st.cache_data(show_spinner=False, ttl="1h")
+@st.cache_data(show_spinner=False, ttl=3600)
 def cached_read_file(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
-@st.cache_data(show_spinner=False, ttl="1h")
+@st.cache_data(show_spinner=False, ttl=3600)
 def cached_load_yaml(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return list(yaml.load_all(f, Loader=SafeLoader))
@@ -124,7 +124,7 @@ def _parse_file(path: str):
             })
     return out
 
-@st.cache_data(show_spinner=False, ttl="30m", max_entries=5)
+@st.cache_data(show_spinner=False, ttl=1800, max_entries=5)
 def load_logs_df():
     paths = [os.path.join(LOGS_DIR, p) for p in os.listdir(LOGS_DIR)
              if p.endswith(".log")]
