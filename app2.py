@@ -49,12 +49,12 @@ def ensure_dirs():
     os.makedirs(LOGS_DIR, exist_ok=True)
 
 # =============== CACHE PESADO ===============
-@st.cache_data(show_spinner=False, ttl="1h")
+@st.cache_data(show_spinner=False, ttl=3600)
 def cached_read_file(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
-@st.cache_data(show_spinner=False, ttl="1h")
+@st.cache_data(show_spinner=False, ttl=3600)
 def cached_load_yaml(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return list(yaml.load_all(f, Loader=SafeLoader))
@@ -124,7 +124,7 @@ def _parse_file(path: str):
             })
     return out
 
-@st.cache_data(show_spinner=False, ttl="30m", max_entries=5)
+@st.cache_data(show_spinner=False, ttl=1800, max_entries=5)
 def load_logs_df():
     paths = [os.path.join(LOGS_DIR, p) for p in os.listdir(LOGS_DIR)
              if p.endswith(".log")]
@@ -141,6 +141,44 @@ def load_logs_df():
         return datetime.fromisoformat(m.group(1).replace(" ", "T")) if m else None
     df["timestamp"] = df["line"].apply(to_ts)
     return df
+
+# =============== DETECÇÃO DE ANOMALIAS =============
+def detect_ingress_anomalies(ingress_docs: list[dict]) -> list[dict]:
+    """Retorna anomalias simples encontradas em objetos Ingress."""
+    anomalies = []
+    seen_hosts = set()
+    for doc in ingress_docs:
+        meta = doc.get("metadata", {})
+        spec = doc.get("spec", {})
+        name = meta.get("name")
+        ns = meta.get("namespace")
+        rules = spec.get("rules") or []
+        if not rules:
+            anomalies.append({"namespace": ns, "name": name, "issue": "missing rules"})
+            continue
+        for rule in rules:
+            host = rule.get("host")
+            if host:
+                if host in seen_hosts:
+                    anomalies.append({"namespace": ns, "name": name, "issue": f"duplicate host {host}"})
+                else:
+                    seen_hosts.add(host)
+    return anomalies
+
+
+def detect_service_anomalies(service_docs: list[dict]) -> list[dict]:
+    """Retorna anomalias simples encontradas em objetos Service."""
+    anomalies = []
+    for doc in service_docs:
+        meta = doc.get("metadata", {})
+        spec = doc.get("spec", {})
+        name = meta.get("name")
+        ns = meta.get("namespace")
+        if spec.get("type") == "LoadBalancer" and not spec.get("ports"):
+            anomalies.append({"namespace": ns, "name": name, "issue": "LoadBalancer sem ports"})
+        if not spec.get("selector"):
+            anomalies.append({"namespace": ns, "name": name, "issue": "service sem selector"})
+    return anomalies
 
 # =============== ANÁLISE RECURSOS =========
 def analyze_resources_fast():
