@@ -1,7 +1,17 @@
 import os
 import re
 import pandas as pd
-from transformers import pipeline
+
+try:
+    from transformers import pipeline
+except Exception:  # noqa: E722 - handle missing frameworks gracefully
+    pipeline = None
+
+try:
+    import torch  # noqa: F401
+    HAS_TORCH = True
+except Exception:  # noqa: E722 - any ImportError
+    HAS_TORCH = False
 
 LOGS_DIR = os.path.join("eks_data", "pod_logs")
 
@@ -36,8 +46,23 @@ def main():
         return
     corpus = "\n".join(df["line"].tolist())[-100000:]
     print(f"{len(df)} linhas carregadas.")
-    print("Carregando modelo de linguagem (distilbert)...")
-    qa = pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
+    qa = None
+    if pipeline is not None and HAS_TORCH:
+        print("Carregando modelo de linguagem (distilbert)...")
+        try:
+            qa = pipeline(
+                "question-answering",
+                model="distilbert-base-uncased-distilled-squad",
+            )
+        except Exception:
+            qa = None
+            print(
+                "Não foi possível carregar o modelo. Continuando apenas com dicas básicas."
+            )
+    else:
+        print(
+            "Bibliotecas de machine learning não disponíveis. Continuando apenas com dicas básicas."
+        )
     print("Chatbot pronto. Digite 'sair' para finalizar.")
     while True:
         try:
@@ -52,11 +77,16 @@ def main():
                 print("Bot:", advice)
                 break
         else:
-            try:
-                ans = qa(question=question, context=corpus)
-                print("Bot:", ans.get("answer"))
-            except Exception:
-                print("Bot: Não consegui gerar uma resposta agora.")
+            if qa is not None:
+                try:
+                    ans = qa(question=question, context=corpus)
+                    print("Bot:", ans.get("answer"))
+                except Exception:
+                    print("Bot: Não consegui gerar uma resposta agora.")
+            else:
+                print(
+                    "Bot: Não consigo responder perguntas complexas sem o modelo de linguagem."
+                )
     print("Encerrado.")
 
 
